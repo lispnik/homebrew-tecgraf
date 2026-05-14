@@ -13,18 +13,16 @@ class TecgrafIm < Formula
   depends_on "zlib"
   depends_on "libexif"
   depends_on "lz4"
-  depends_on "fftw" => :optional
-  depends_on "jasper" => :optional
-  depends_on "lua" => :optional
+  depends_on "fftw"
 
   def install
     system "cmake", "-S", ".", "-B", "build",
                     "-DCMAKE_BUILD_TYPE=Release",
                     "-DIM_BUILD_PROCESS=ON",
                     "-DIM_BUILD_PROCESS_OMP=ON",
-                    "-DIM_BUILD_JP2=#{build.with?("jasper") ? "ON" : "OFF"}",
-                    "-DIM_BUILD_FFTW3=#{build.with?("fftw") ? "ON" : "OFF"}",
-                    "-DIM_BUILD_LUA=#{build.with?("lua") ? "ON" : "OFF"}",
+                    "-DIM_BUILD_FFTW3=ON",
+                    "-DIM_BUILD_JP2=OFF",
+                    "-DIM_BUILD_LUA=OFF",
                     *std_cmake_args
 
     system "cmake", "--build", "build"
