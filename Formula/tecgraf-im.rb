@@ -14,6 +14,7 @@ class TecgrafIm < Formula
   depends_on "libexif"
   depends_on "lz4"
   depends_on "fftw"
+  depends_on "openjpeg"
 
   def install
     system "cmake", "-S", ".", "-B", "build",
@@ -21,7 +22,7 @@ class TecgrafIm < Formula
                     "-DIM_BUILD_PROCESS=ON",
                     "-DIM_BUILD_PROCESS_OMP=ON",
                     "-DIM_BUILD_FFTW3=ON",
-                    "-DIM_BUILD_JP2=OFF",
+                    "-DIM_BUILD_JP2=ON",
                     "-DIM_BUILD_LUA=OFF",
                     *std_cmake_args
 
@@ -31,17 +32,44 @@ class TecgrafIm < Formula
 
   test do
     # Create a simple test program
-    (testpath/"test.cpp").write <<~EOS
+    (testpath/"test.c").write <<~EOS
       #include <im.h>
-      #include <iostream>
+      #include <im_lib.h>
+      #include <im_format_jp2.h>
+      #include <stdio.h>
+      #include <string.h>
 
       int main() {
-          std::cout << "IM version: " << imVersion() << std::endl;
-          return 0;
+          printf("IM version: %s\\n", imVersion());
+
+          // Test JP2 support
+          imFormatRegisterJP2();
+
+          char* format_list[50];
+          int format_count;
+          imFormatList(format_list, &format_count);
+
+          int jp2_found = 0;
+          for (int i = 0; i < format_count; i++) {
+              if (strcmp(format_list[i], "JP2") == 0) {
+                  jp2_found = 1;
+                  break;
+              }
+          }
+
+          if (jp2_found) {
+              printf("JP2 support: enabled\\n");
+              return 0;
+          } else {
+              printf("JP2 support: missing\\n");
+              return 1;
+          }
       }
     EOS
 
-    system ENV.cxx, "test.cpp", "-I#{include}", "-L#{lib}", "-lim", "-o", "test"
-    assert_match /IM version:/, shell_output("./test")
+    system ENV.cc, "test.c", "-I#{include}", "-L#{lib}", "-lim", "-lim_jp2", "-o", "test"
+    output = shell_output("./test")
+    assert_match /IM version:/, output
+    assert_match /JP2 support: enabled/, output
   end
 end
