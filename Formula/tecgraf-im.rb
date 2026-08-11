@@ -7,6 +7,7 @@ class TecgrafIm < Formula
 
   depends_on "cmake" => :build
   depends_on "pkg-config" => :build
+  depends_on "lua"
   depends_on "libtiff"
   depends_on "jpeg-turbo"
   depends_on "libpng"
@@ -23,7 +24,7 @@ class TecgrafIm < Formula
                     "-DIM_BUILD_PROCESS_OMP=ON",
                     "-DIM_BUILD_FFTW3=ON",
                     "-DIM_BUILD_JP2=ON",
-                    "-DIM_BUILD_LUA=OFF",
+                    "-DIM_BUILD_LUA=ON",
                     *std_cmake_args
 
     system "cmake", "--build", "build"
