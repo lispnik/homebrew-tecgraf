@@ -7,6 +7,7 @@ class TecgrafCd < Formula
 
   depends_on "cmake" => :build
   depends_on "pkg-config" => :build
+  depends_on "lua"
   depends_on "cairo"
   depends_on "fontconfig"
   depends_on "freetype"
@@ -25,17 +26,26 @@ class TecgrafCd < Formula
       "-DCD_ENABLE_GL=ON",
       "-DCD_ENABLE_PDF=OFF",
       "-DCD_ENABLE_IM=ON",
-      "-DCD_ENABLE_LUA=OFF",
+      "-DCD_ENABLE_LUA=ON",
       "-DCD_ENABLE_PPTX=OFF",
+      "-DCD_ENABLE_DIRECT2D=OFF",
+      "-DCD_ENABLE_GDIPLUS=OFF",
       "-DCMAKE_C_FLAGS=-Wno-incompatible-function-pointer-types"
     ]
 
-    if OS.mac?
-      # On macOS, use X11 (could add native Cocoa backend later)
-      args << "-DCD_PLATFORM_MACOS=ON"
-    elsif OS.linux?
+    # macOS needs no extra flags: the native Quartz driver
+    # (CoreGraphics/CoreText) is enabled by default and provides every
+    # context the Lua bindings need, clipboard included.
+    if OS.linux?
       args << "-DCD_ENABLE_XRENDER=ON"
     end
+
+    # Add explicit paths to IM Lua libraries
+    im_lib_dir = Formula["lispnik/tecgraf/tecgraf-im"].opt_lib
+    args += [
+      "-DIMLUA_LIBRARY=#{im_lib_dir}/imlua.dylib",
+      "-DIMLUA_PROCESS_LIBRARY=#{im_lib_dir}/imlua_process.dylib"
+    ]
 
     system "cmake", "-S", ".", "-B", "build", *args, *std_cmake_args
     system "cmake", "--build", "build"
