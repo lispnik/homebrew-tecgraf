@@ -1,6 +1,9 @@
 class TecgrafImlab < Formula
   desc "Graphical application for scientific image processing"
   homepage "https://github.com/lispnik/tecgraf-imlab"
+  # A branch, not a tagged release: this builds whatever main points at when it is installed.
+  # Note that Homebrew clones it -- a working copy on the same machine is not what gets built,
+  # so local work has to be committed and pushed before `brew reinstall` can see it.
   url "https://github.com/lispnik/tecgraf-imlab.git", branch: "main"
   version "3.3"
   license "MIT"
@@ -45,6 +48,13 @@ class TecgrafImlab < Formula
       The convolution kernels it ships are installed in
 
         #{opt_pkgshare}/krn
+
+      This builds from a clone of the repository, not from any working copy you have locally,
+      and from whatever main points at when it is installed. To try a local change, commit and
+      push it and then `brew reinstall #{name}` -- or, for an ordinary edit-and-run loop, build
+      the working copy directly:
+
+        cmake -S . -B build && cmake --build build && ./build/imlab
     EOS
   end
 
