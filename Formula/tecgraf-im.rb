@@ -6,11 +6,16 @@ class TecgrafIm < Formula
   license "MIT"
   head "https://github.com/lispnik/tecgraf-im.git", branch: "master"
 
+  # JasPer, the JP2 backend, has a long run of unfixed CVEs and was dropped
+  # from Debian after 18.04, so JP2 is off by default. Opt back in with
+  # --with-jp2, which pulls in jasper and builds libim_jp2.
+  option "with-jp2", "Build JP2 support (adds the jasper dependency)"
+
   depends_on "cmake" => :build
   depends_on "pkg-config" => :build
 
   depends_on "fftw"
-  depends_on "jasper"      # JP2; the build wants jasper, not openjpeg
+  depends_on "jasper" if build.with? "jp2"
   depends_on "jpeg-turbo"
   depends_on "libexif"
   depends_on "libheif"     # HEIC/AVIF
@@ -28,32 +33,37 @@ class TecgrafIm < Formula
   def install
     lua = Formula["lua@5.4"]
 
-    system "cmake", "-S", ".", "-B", "build",
-                    "-DCMAKE_BUILD_TYPE=Release",
-                    "-DIM_BUILD_PROCESS=ON",
-                    "-DIM_BUILD_PROCESS_OMP=ON",
-                    "-DIM_BUILD_FFTW3=ON",
-                    "-DIM_BUILD_JP2=ON",
-                    "-DIM_BUILD_HEIF=ON",
-                    "-DIM_BUILD_LUA=ON",
-                    "-DLUA_INCLUDE_DIR=#{lua.opt_include}/lua5.4",
-                    "-DLUA_LIBRARY=#{lua.opt_lib}/liblua5.4.dylib",
-                    *std_cmake_args
+    args = [
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DIM_BUILD_PROCESS=ON",
+      "-DIM_BUILD_PROCESS_OMP=ON",
+      "-DIM_BUILD_FFTW3=ON",
+      "-DIM_BUILD_HEIF=ON",
+      "-DIM_BUILD_CAPTURE=ON",   # macOS: AVFoundation backend, SDK frameworks only
+      "-DIM_BUILD_LUA=ON",
+      "-DLUA_INCLUDE_DIR=#{lua.opt_include}/lua5.4",
+      "-DLUA_LIBRARY=#{lua.opt_lib}/liblua5.4.dylib",
+    ]
+    args << (build.with?("jp2") ? "-DIM_BUILD_JP2=ON" : "-DIM_BUILD_JP2=OFF")
 
+    system "cmake", "-S", ".", "-B", "build", *args, *std_cmake_args
     system "cmake", "--build", "build"
     system "cmake", "--install", "build"
   end
 
   test do
-    # Exercises the two add-ons with external dependencies that are easiest to
-    # get wrong in the formula: JP2 (jasper) and HEIF/AVIF (libheif). Both
-    # register at run time, so a missing or mismatched library shows up here
-    # rather than as a silently absent format.
+    # Exercises the add-ons with external dependencies easiest to get wrong in
+    # the formula: HEIF/AVIF (libheif) always, and JP2 (jasper) when it was
+    # built in. Both register at run time, so a missing or mismatched library
+    # shows up here rather than as a silently absent format. The WITH_JP2 gate
+    # tracks --with-jp2 so the test checks exactly what was built.
     (testpath/"test.c").write <<~EOS
       #include <im.h>
       #include <im_lib.h>
-      #include <im_format_jp2.h>
       #include <im_format_heif.h>
+      #ifdef WITH_JP2
+      #include <im_format_jp2.h>
+      #endif
       #include <stdio.h>
       #include <string.h>
 
@@ -74,13 +84,20 @@ class TecgrafIm < Formula
       {
           printf("IM version: %s\\n", imVersion());
 
-          imFormatRegisterJP2();
           imFormatRegisterHEIF();   /* registers both HEIF and AVIF */
+      #ifdef WITH_JP2
+          imFormatRegisterJP2();
+      #endif
 
-          const char* wanted[] = { "JP2", "HEIF", "AVIF" };
+          const char* wanted[] = {
+              "HEIF", "AVIF",
+      #ifdef WITH_JP2
+              "JP2",
+      #endif
+          };
           int missing = 0;
 
-          for (int i = 0; i < 3; i++)
+          for (int i = 0; i < (int)(sizeof(wanted)/sizeof(wanted[0])); i++)
           {
               int found = has_format(wanted[i]);
               printf("%s support: %s\\n", wanted[i], found ? "enabled" : "missing");
@@ -92,13 +109,21 @@ class TecgrafIm < Formula
       }
     EOS
 
-    system ENV.cc, "test.c", "-I#{include}", "-L#{lib}",
-                   "-lim", "-lim_jp2", "-lim_heif", "-o", "test"
+    # Detect JP2 by the library that was actually built rather than by
+    # build.with?: current Homebrew does not record a plain `option` in the
+    # install receipt, so build.with? reads false here even after --with-jp2.
+    # The presence of libim_jp2 is the ground truth.
+    jp2_built = (lib/shared_library("libim_jp2")).exist?
+
+    cflags = ["-I#{include}", "-L#{lib}", "-lim", "-lim_heif"]
+    cflags += ["-DWITH_JP2", "-lim_jp2"] if jp2_built
+
+    system ENV.cc, "test.c", *cflags, "-o", "test"
     output = shell_output("./test")
 
     assert_match(/IM version:/, output)
-    assert_match(/JP2 support: enabled/, output)
     assert_match(/HEIF support: enabled/, output)
     assert_match(/AVIF support: enabled/, output)
+    assert_match(/JP2 support: enabled/, output) if jp2_built
   end
 end
