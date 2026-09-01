@@ -1,9 +1,10 @@
 class TecgrafIm < Formula
   desc "Toolkit for digital imaging with simple API for scientific applications"
   homepage "https://github.com/lispnik/tecgraf-im"
-  url "https://github.com/lispnik/tecgraf-im.git", branch: "master"
-  version "3.15"
+  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.0.2.tar.gz"
+  sha256 "9bca9a6eebb1c41cf29ded8a19d431c34adceb4cdebde808220e5aa78777e456"
   license "MIT"
+  head "https://github.com/lispnik/tecgraf-im.git", branch: "master"
 
   depends_on "cmake" => :build
   depends_on "pkg-config" => :build
