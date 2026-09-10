@@ -1,8 +1,8 @@
 class TecgrafIm < Formula
   desc "Toolkit for digital imaging with simple API for scientific applications"
   homepage "https://github.com/lispnik/tecgraf-im"
-  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.1.0.tar.gz"
-  sha256 "f20abe55eae6b2f3dae3a48763df1db9af7ddc5383da0d321a7b41e68b663680"
+  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.1.1.tar.gz"
+  sha256 "0640114b586b1389b2ed27e9d05f146eeee63c02098c788f733390d18ccd4ad1"
   license "MIT"
   head "https://github.com/lispnik/tecgraf-im.git", branch: "master"
 
