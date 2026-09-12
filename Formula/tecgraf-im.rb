@@ -1,8 +1,8 @@
 class TecgrafIm < Formula
   desc "Toolkit for digital imaging with simple API for scientific applications"
   homepage "https://github.com/lispnik/tecgraf-im"
-  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.1.1.tar.gz"
-  sha256 "0640114b586b1389b2ed27e9d05f146eeee63c02098c788f733390d18ccd4ad1"
+  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.2.0.tar.gz"
+  sha256 "0f40264cdd9e712c83a0781584842bc6e573fb0a3a26712aa177985662ca405a"
   license "MIT"
   head "https://github.com/lispnik/tecgraf-im.git", branch: "master"
 
@@ -58,10 +58,12 @@ class TecgrafIm < Formula
     # shows up here rather than as a silently absent format. The WITH_JP2 gate
     # tracks --with-jp2 so the test checks exactly what was built.
     #
-    # Also links libim_process and runs one operation from it. Format
+    # Also links libim_process and runs operations from it. Format
     # registration alone would pass identically whatever libim_process
     # contains, and on a version bump that adds to it the test should be able
-    # to tell the two versions apart.
+    # to tell the two versions apart -- so each release that adds operations
+    # gets one exercised here. Decorrelation stretch arrived in 2.1.0,
+    # watershed segmentation in 2.2.0.
     (testpath/"test.c").write <<~EOS
       #include <im.h>
       #include <im_lib.h>
@@ -113,6 +115,37 @@ class TecgrafIm < Formula
           return differing > dst->count / 4;
       }
 
+      /* WatershedSegment splits objects that touch, which imAnalyzeFindRegions
+         cannot: two overlapping discs are ONE connected component and two
+         regions. Added in 2.2.0, so without this the test would pass unchanged
+         against 2.1.1. */
+      static int watershed_works(void)
+      {
+          imImage* bin = imImageCreate(40, 24, IM_BINARY, IM_BYTE);
+          imImage* out = imImageCreate(40, 24, IM_GRAY, IM_USHORT);
+          unsigned char* b;
+          int x, y, regions = 0, ok;
+
+          if (!bin || !out)
+              return 0;
+
+          b = (unsigned char*)bin->data[0];
+          for (y = 0; y < 24; y++)
+              for (x = 0; x < 40; x++)
+              {
+                  int d1 = (x - 12) * (x - 12) + (y - 12) * (y - 12);
+                  int d2 = (x - 26) * (x - 26) + (y - 12) * (y - 12);
+                  b[y * 40 + x] = (d1 <= 64 || d2 <= 64) ? 1 : 0;
+              }
+
+          ok = imProcessWatershedSegment(bin, out, 8, 1, &regions);
+
+          imImageDestroy(bin);
+          imImageDestroy(out);
+
+          return ok && regions == 2;
+      }
+
       static int has_format(const char* wanted)
       {
           char* format_list[50];
@@ -131,6 +164,7 @@ class TecgrafIm < Formula
           printf("IM version: %s\\n", imVersion());
           printf("decorrelation stretch: %s\\n",
                  decorrelation_works() ? "working" : "broken");
+          printf("watershed: %s\\n", watershed_works() ? "working" : "broken");
 
           imFormatRegisterHEIF();   /* registers both HEIF and AVIF */
       #ifdef WITH_JP2
@@ -171,6 +205,7 @@ class TecgrafIm < Formula
 
     assert_match(/IM version:/, output)
     assert_match(/decorrelation stretch: working/, output)
+    assert_match(/watershed: working/, output)
     assert_match(/HEIF support: enabled/, output)
     assert_match(/AVIF support: enabled/, output)
     assert_match(/JP2 support: enabled/, output) if jp2_built
