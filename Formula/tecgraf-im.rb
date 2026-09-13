@@ -1,8 +1,8 @@
 class TecgrafIm < Formula
   desc "Toolkit for digital imaging with simple API for scientific applications"
   homepage "https://github.com/lispnik/tecgraf-im"
-  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.2.0.tar.gz"
-  sha256 "0f40264cdd9e712c83a0781584842bc6e573fb0a3a26712aa177985662ca405a"
+  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.2.1.tar.gz"
+  sha256 "d91dd202baef704919179cfa6624886c4bdfa91731e56d04c23261b905190b30"
   license "MIT"
   head "https://github.com/lispnik/tecgraf-im.git", branch: "master"
 
@@ -63,7 +63,9 @@ class TecgrafIm < Formula
     # contains, and on a version bump that adds to it the test should be able
     # to tell the two versions apart -- so each release that adds operations
     # gets one exercised here. Decorrelation stretch arrived in 2.1.0,
-    # watershed segmentation in 2.2.0.
+    # watershed segmentation in 2.2.0. 2.2.1 added no operations but fixed a
+    # crash reachable only through libim_process_omp, which nothing here
+    # linked -- see the second program below.
     (testpath/"test.c").write <<~EOS
       #include <im.h>
       #include <im_lib.h>
@@ -203,11 +205,85 @@ class TecgrafIm < Formula
     system ENV.cc, "test.c", *cflags, "-o", "test"
     output = shell_output("./test")
 
+    # Nothing above links libim_process_omp, which this formula also builds:
+    # the program uses libim_process, so an OpenMP build that was broken,
+    # missing, or linked against the wrong libomp would install silently.
+    #
+    # Not a hypothetical gap. Up to 2.2.0 the OpenMP progress counter freed a
+    # lock it had never allocated, so imAnalyzeFindRegions and imProcessCanny
+    # killed the process at address 0 -- but only in that library, and only
+    # with a callback attached, which is the one thing the test above never
+    # does. This program does both, and segfaults against 2.2.0.
+    (testpath/"omp.c").write <<~EOS
+      #include <im.h>
+      #include <im_image.h>
+      #include <im_counter.h>
+      #include <im_process.h>
+      #include <stdio.h>
+
+      static int calls = 0;
+
+      static int on_progress(int counter, void* user_data, const char* text, int progress)
+      {
+          (void)counter; (void)user_data; (void)text; (void)progress;
+          calls++;
+          return 1;
+      }
+
+      /* Labels a square and finds its edges with a callback attached the whole
+         time. A callback is what makes the counter do anything at all: without
+         one imCounterBegin returns -1 and every path through it is skipped. */
+      int main(void)
+      {
+          imImage* bin = imImageCreate(64, 64, IM_BINARY, IM_BYTE);
+          imImage* labels = imImageCreate(64, 64, IM_GRAY, IM_USHORT);
+          imImage* gray = imImageCreate(64, 64, IM_GRAY, IM_BYTE);
+          imImage* edges = imImageCreate(64, 64, IM_GRAY, IM_BYTE);
+          unsigned char* b;
+          unsigned char* g;
+          int x, y, regions = 0, ok;
+
+          if (!bin || !labels || !gray || !edges)
+              return 1;
+
+          b = (unsigned char*)bin->data[0];
+          g = (unsigned char*)gray->data[0];
+          for (y = 0; y < 64; y++)
+              for (x = 0; x < 64; x++)
+              {
+                  int inside = (x >= 16 && x < 48 && y >= 16 && y < 48);
+                  b[y * 64 + x] = inside ? 1 : 0;
+                  g[y * 64 + x] = inside ? 255 : 0;
+              }
+
+          imCounterSetCallback(NULL, on_progress);
+          ok = imAnalyzeFindRegions(bin, labels, 8, 1, &regions);
+          ok = imProcessCanny(gray, edges, 1.4) && ok;
+          imCounterSetCallback(NULL, NULL);
+
+          printf("progress callback: %s (%d calls, %d region)\\n",
+                 (ok && regions == 1 && calls > 0) ? "working" : "broken",
+                 calls, regions);
+
+          imImageDestroy(bin);
+          imImageDestroy(labels);
+          imImageDestroy(gray);
+          imImageDestroy(edges);
+
+          return (ok && regions == 1 && calls > 0) ? 0 : 1;
+      }
+    EOS
+
+    system ENV.cc, "omp.c", "-I#{include}", "-L#{lib}",
+           "-lim", "-lim_process_omp", "-o", "omp_test"
+    omp_output = shell_output("./omp_test")
+
     assert_match(/IM version:/, output)
     assert_match(/decorrelation stretch: working/, output)
     assert_match(/watershed: working/, output)
     assert_match(/HEIF support: enabled/, output)
     assert_match(/AVIF support: enabled/, output)
     assert_match(/JP2 support: enabled/, output) if jp2_built
+    assert_match(/progress callback: working/, omp_output)
   end
 end
