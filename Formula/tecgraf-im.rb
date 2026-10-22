@@ -63,7 +63,9 @@ class TecgrafIm < Formula
       # directory turns the build-tree default off (2.3.0 and later).
       "-DCMAKE_INSTALL_NAME_DIR=#{opt_lib}",
       "-DLUA_INCLUDE_DIR=#{lua.opt_include}/lua5.4",
-      "-DLUA_LIBRARY=#{lua.opt_lib}/liblua5.4.dylib",
+      # shared_library, not a literal ".dylib": on Linux lua@5.4 installs
+      # liblua5.4.so and the build stopped linking imlua.
+      "-DLUA_LIBRARY=#{lua.opt_lib}/#{shared_library("liblua5.4")}",
     ]
     args << (build.with?("jp2") ? "-DIM_BUILD_JP2=ON" : "-DIM_BUILD_JP2=OFF")
 
@@ -533,7 +535,7 @@ class TecgrafIm < Formula
     EOS
 
     system ENV.cc, "formats.c", "-I#{include}", "-L#{lib}", "-lim", "-lim_webp",
-           "-lim_jxl", "-lim_exr", "-lim_fits", "-lim_camraw", "-o", "formats_test"
+           "-lim_jxl", "-lim_exr", "-lim_fits", "-lim_camraw", "-lm", "-o", "formats_test"
     formats_output = shell_output("./formats_test")
 
     assert_match(/IM version:/, output)
