@@ -1,8 +1,8 @@
 class TecgrafIm < Formula
   desc "Toolkit for digital imaging with simple API for scientific applications"
   homepage "https://github.com/lispnik/tecgraf-im"
-  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.2.1.tar.gz"
-  sha256 "d91dd202baef704919179cfa6624886c4bdfa91731e56d04c23261b905190b30"
+  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.2.2.tar.gz"
+  sha256 "ce2b52a9e07c08537271ffc1de501eb1175536727650bc1d0e7b955e6b3eef2d"
   license "MIT"
   head "https://github.com/lispnik/tecgraf-im.git", branch: "master"
 
@@ -65,7 +65,9 @@ class TecgrafIm < Formula
     # gets one exercised here. Decorrelation stretch arrived in 2.1.0,
     # watershed segmentation in 2.2.0. 2.2.1 added no operations but fixed a
     # crash reachable only through libim_process_omp, which nothing here
-    # linked -- see the second program below.
+    # linked -- see the second program below. 2.2.2 added none either, and
+    # stopped the writers putting memory they never set into files -- see
+    # the third.
     (testpath/"test.c").write <<~EOS
       #include <im.h>
       #include <im_lib.h>
@@ -278,6 +280,101 @@ class TecgrafIm < Formula
            "-lim", "-lim_process_omp", "-o", "omp_test"
     omp_output = shell_output("./omp_test")
 
+    # Up to 2.2.1 four writers put memory they had never set into the files
+    # they wrote, where it could carry anything the process had in memory --
+    # and the files decoded correctly, so no round trip could see it. This
+    # writes the three that are reachable from a plain save over memory
+    # filled with 0xAA, and checks the bytes that leaked: BMP line padding
+    # (heap), the GIF interlaced flag (heap) and the unused PCX palette
+    # entries (stack). MallocScribble=1 is what makes macOS fill every new
+    # heap block, MALLOC_PERTURB_ the same on glibc; the program fills the
+    # stack itself. Fails all three against 2.2.1.
+    (testpath/"unset.c").write <<~EOS
+      #include <im.h>
+      #include <im_image.h>
+      #include <im_util.h>
+      #include <stdio.h>
+      #include <string.h>
+
+      /* Fills the stack the save will run on, so a stack byte the writer did not
+         set is 0xAA. Volatile, or the compiler drops the stores as dead. */
+      static __attribute__((noinline)) void soil_stack(void)
+      {
+          unsigned char buffer[256 * 1024];
+          volatile unsigned char* p = buffer;
+          for (size_t i = 0; i < sizeof(buffer); i++)
+              p[i] = 0xAA;
+      }
+
+      static long read_file(const char* name, unsigned char* data, long size)
+      {
+          FILE* file = fopen(name, "rb");
+          long got;
+          if (!file)
+              return -1;
+          got = (long)fread(data, 1, (size_t)size, file);
+          fclose(file);
+          return got;
+      }
+
+      static unsigned char data[65536];
+
+      int main(void)
+      {
+          int clean = 1, i, y;
+          long size;
+
+          /* BMP lines are padded to 4 bytes: a 37-pixel RGB line is 111 bytes and
+             one of padding, which came from the heap. */
+          imImage* rgb = imImageCreate(37, 23, IM_RGB, IM_BYTE);
+          imImageClear(rgb);
+          soil_stack();
+          imFileImageSave("black.bmp", "BMP", rgb);
+          size = read_file("black.bmp", data, sizeof(data));
+          if (size < 54 + 23 * 112)
+              clean = 0;
+          else
+              for (y = 0; y < 23; y++)
+                  if (data[54 + y * 112 + 111] != 0)
+                      clean = 0;
+          printf("BMP line padding: %s\\n", clean ? "zeros" : "unset memory");
+
+          /* The GIF interlaced flag, bit 0x40 of the image descriptor's flags,
+             came from a field nothing set. */
+          imImage* gray = imImageCreate(37, 23, IM_GRAY, IM_BYTE);
+          imImageClear(gray);
+          soil_stack();
+          imFileImageSave("gray.gif", "GIF", gray);
+          size = read_file("gray.gif", data, sizeof(data));
+          int gif_clean = size > 22 && data[13] == ',' && (data[22] & 0x40) == 0;
+          printf("GIF interlaced flag: %s\\n", gif_clean ? "clear" : "unset memory");
+
+          /* PCX writes 256 palette entries at the end of the file; of these 5 are
+             used, and the rest came from the stack. */
+          imImage* map = imImageCreate(37, 23, IM_MAP, IM_BYTE);
+          imImageClear(map);
+          for (i = 0; i < 5; i++)
+              map->palette[i] = imColorEncode((imbyte)(i * 50), 0, 0);
+          map->palette_count = 5;
+          soil_stack();
+          imFileImageSave("map.pcx", "PCX", map);
+          size = read_file("map.pcx", data, sizeof(data));
+          int pcx_clean = size > 768;
+          for (i = 5 * 3; pcx_clean && i < 768; i++)
+              if (data[size - 768 + i] != 0)
+                  pcx_clean = 0;
+          printf("PCX palette tail: %s\\n", pcx_clean ? "zeros" : "unset memory");
+
+          imImageDestroy(rgb);
+          imImageDestroy(gray);
+          imImageDestroy(map);
+          return (clean && gif_clean && pcx_clean) ? 0 : 1;
+      }
+    EOS
+
+    system ENV.cc, "unset.c", "-I#{include}", "-L#{lib}", "-lim", "-o", "unset_test"
+    unset_output = shell_output("MallocScribble=1 MALLOC_PERTURB_=85 ./unset_test")
+
     assert_match(/IM version:/, output)
     assert_match(/decorrelation stretch: working/, output)
     assert_match(/watershed: working/, output)
@@ -285,5 +382,8 @@ class TecgrafIm < Formula
     assert_match(/AVIF support: enabled/, output)
     assert_match(/JP2 support: enabled/, output) if jp2_built
     assert_match(/progress callback: working/, omp_output)
+    assert_match(/BMP line padding: zeros/, unset_output)
+    assert_match(/GIF interlaced flag: clear/, unset_output)
+    assert_match(/PCX palette tail: zeros/, unset_output)
   end
 end
