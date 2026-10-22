@@ -1,8 +1,8 @@
 class TecgrafIm < Formula
   desc "Toolkit for digital imaging with simple API for scientific applications"
   homepage "https://github.com/lispnik/tecgraf-im"
-  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.2.2.tar.gz"
-  sha256 "ce2b52a9e07c08537271ffc1de501eb1175536727650bc1d0e7b955e6b3eef2d"
+  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.3.0.tar.gz"
+  sha256 "b82286273f2b4e9978b3a858f21bd412df66c257f9165d9527fda9ca4149b402"
   license "MIT"
   head "https://github.com/lispnik/tecgraf-im.git", branch: "master"
 
@@ -14,20 +14,26 @@ class TecgrafIm < Formula
   depends_on "cmake" => :build
   depends_on "pkg-config" => :build
 
+  depends_on "cfitsio"     # FITS
   depends_on "fftw"
+  depends_on "imath"       # OpenEXR's maths library, which its headers include
   depends_on "jasper" if build.with? "jp2"
   depends_on "jpeg-turbo"
+  depends_on "jpeg-xl"     # JPEG XL
   depends_on "libexif"
   depends_on "libheif"     # HEIC/AVIF
   depends_on "liblzf"
   depends_on "libomp"      # IM_BUILD_PROCESS_OMP
   depends_on "libpng"
+  depends_on "libraw"      # camera raw, read only
   depends_on "libtiff"
   # IM does not compile against Lua 5.5 -- macros that changed in 5.5 break the
   # bindings -- so pin 5.4 rather than following the "lua" formula, which is
   # 5.5 now. The CI workflows pin it the same way.
   depends_on "lua@5.4"
   depends_on "lz4"
+  depends_on "openexr"     # EXR
+  depends_on "webp"        # WebP
   depends_on "zlib"
 
   def install
@@ -39,8 +45,23 @@ class TecgrafIm < Formula
       "-DIM_BUILD_PROCESS_OMP=ON",
       "-DIM_BUILD_FFTW3=ON",
       "-DIM_BUILD_HEIF=ON",
+      "-DIM_BUILD_WEBP=ON",
+      "-DIM_BUILD_JXL=ON",
+      "-DIM_BUILD_EXR=ON",
+      "-DIM_BUILD_FITS=ON",
+      # Off by default upstream because LibRaw is LGPL and a redistributor
+      # takes that on. A formula builds for the machine it runs on and
+      # redistributes nothing, so turn it on.
+      "-DIM_BUILD_CAMRAW=ON",
       "-DIM_BUILD_CAPTURE=ON",   # macOS: AVFoundation backend, SDK frameworks only
       "-DIM_BUILD_LUA=ON",
+      # On macOS IM embeds its build directory as every dylib's install name,
+      # so in-tree builds load without an rpath. An installed keg needs the
+      # names to point at itself instead, or each add-on loads libim from a
+      # build directory that no longer exists -- and Homebrew's relocation
+      # rewrites a dylib's own id but not that reference. Naming the
+      # directory turns the build-tree default off (2.3.0 and later).
+      "-DCMAKE_INSTALL_NAME_DIR=#{opt_lib}",
       "-DLUA_INCLUDE_DIR=#{lua.opt_include}/lua5.4",
       "-DLUA_LIBRARY=#{lua.opt_lib}/liblua5.4.dylib",
     ]
@@ -67,7 +88,8 @@ class TecgrafIm < Formula
     # crash reachable only through libim_process_omp, which nothing here
     # linked -- see the second program below. 2.2.2 added none either, and
     # stopped the writers putting memory they never set into files -- see
-    # the third.
+    # the third. 2.3.0 added file formats rather than operations -- see the
+    # fourth.
     (testpath/"test.c").write <<~EOS
       #include <im.h>
       #include <im_lib.h>
@@ -375,6 +397,145 @@ class TecgrafIm < Formula
     system ENV.cc, "unset.c", "-I#{include}", "-L#{lib}", "-lim", "-o", "unset_test"
     unset_output = shell_output("MallocScribble=1 MALLOC_PERTURB_=85 ./unset_test")
 
+    # 2.3.0 added seven formats: HDR and QOI built into libim, and WebP,
+    # JPEG XL, OpenEXR, FITS and camera raw as add-on libraries, each of
+    # which this formula now depends on. A missing or mismatched dependency
+    # shows up as a format that does not register; a driver that registers
+    # but is broken shows up as a round trip that does not come back. Every
+    # writable one is round-tripped losslessly -- HDR to RGBE's own
+    # precision -- and CAMRAW, read-only, has to be registered. Fails against
+    # 2.2.2, which has none of them.
+    (testpath/"formats.c").write <<~EOS
+      #include <im.h>
+      #include <im_image.h>
+      #include <im_format_webp.h>
+      #include <im_format_jxl.h>
+      #include <im_format_exr.h>
+      #include <im_format_fits.h>
+      #include <im_format_camraw.h>
+      #include <math.h>
+      #include <stdio.h>
+      #include <string.h>
+
+      static int registered(const char* wanted)
+      {
+          char* list[64];
+          int count = 0, i;
+          imFormatList(list, &count);
+          for (i = 0; i < count; i++)
+              if (strcmp(list[i], wanted) == 0)
+                  return 1;
+          return 0;
+      }
+
+      /* Saves a 29x17 ramp through one format and checks it comes back.
+         tolerance is relative, and 0 means exact. */
+      static int round_trips(const char* format, const char* file, int color,
+                             int type, int lossless, double tolerance)
+      {
+          imImage* src = imImageCreate(29, 17, color, type);
+          imImage* back;
+          int error = 0, i, c, ok = 1;
+          if (!src)
+              return 0;
+
+          for (c = 0; c < src->depth; c++)
+              for (i = 0; i < src->count; i++)
+              {
+                  double v = (i * 7 + c * 31) % 251;
+                  if (type == IM_BYTE)
+                      ((unsigned char**)src->data)[c][i] = (unsigned char)v;
+                  else if (type == IM_USHORT)
+                      ((unsigned short**)src->data)[c][i] = (unsigned short)(v * 257);
+                  else
+                      ((float**)src->data)[c][i] = (float)(v / 16.0 + 0.5);
+              }
+
+          imFile* out = imFileNew(file, format, &error);
+          if (!out)
+              return 0;
+          imFileSetAttribute(out, "Lossless", IM_INT, 1, &lossless);
+          error = imFileSaveImage(out, src);
+          imFileClose(out);
+
+          back = error ? NULL : imFileImageLoad(file, 0, &error);
+          if (!back || back->width != 29 || back->height != 17)
+              ok = 0;
+
+          for (c = 0; ok && c < src->depth; c++)
+              for (i = 0; ok && i < src->count; i++)
+              {
+                  double a, b;
+                  if (type == IM_BYTE)
+                  {
+                      a = ((unsigned char**)src->data)[c][i];
+                      b = ((unsigned char**)back->data)[c][i];
+                  }
+                  else if (type == IM_USHORT)
+                  {
+                      a = ((unsigned short**)src->data)[c][i];
+                      b = ((unsigned short**)back->data)[c][i];
+                  }
+                  else
+                  {
+                      a = ((float**)src->data)[c][i];
+                      b = ((float**)back->data)[c][i];
+                  }
+                  if (fabs(a - b) > tolerance * fabs(a))
+                      ok = 0;
+              }
+
+          if (back)
+              imImageDestroy(back);
+          imImageDestroy(src);
+          return ok;
+      }
+
+      int main(void)
+      {
+          const char* names[] = { "HDR", "QOI", "WEBP", "JXL", "EXR", "FITS", "CAMRAW" };
+          int i, all = 1;
+
+          imFormatRegisterWebP();
+          imFormatRegisterJXL();
+          imFormatRegisterEXR();
+          imFormatRegisterFITS();
+          imFormatRegisterCAMRAW();
+
+          for (i = 0; i < 7; i++)
+          {
+              int found = registered(names[i]);
+              printf("%s registered: %s\\n", names[i], found ? "yes" : "no");
+              all = all && found;
+          }
+
+          struct { const char* format; const char* file; int color, type; double tol; } cases[] = {
+              { "QOI",  "t.qoi",  IM_RGB,  IM_BYTE,   0 },
+              { "WEBP", "t.webp", IM_RGB,  IM_BYTE,   0 },
+              { "JXL",  "t.jxl",  IM_GRAY, IM_USHORT, 0 },
+              { "EXR",  "t.exr",  IM_RGB,  IM_FLOAT,  0 },
+              { "FITS", "t.fits", IM_GRAY, IM_USHORT, 0 },
+              /* Gray, written as three equal channels: RGBE's precision is
+                 relative to a pixel's brightest channel, so only with all
+                 three alike does a per-value tolerance mean anything. */
+              { "HDR",  "t.hdr",  IM_GRAY, IM_FLOAT,  1.0 / 64 },
+          };
+          for (i = 0; i < 6; i++)
+          {
+              int ok = round_trips(cases[i].format, cases[i].file, cases[i].color,
+                                   cases[i].type, 1, cases[i].tol);
+              printf("%s round trip: %s\\n", cases[i].format, ok ? "ok" : "broken");
+              all = all && ok;
+          }
+
+          return all ? 0 : 1;
+      }
+    EOS
+
+    system ENV.cc, "formats.c", "-I#{include}", "-L#{lib}", "-lim", "-lim_webp",
+           "-lim_jxl", "-lim_exr", "-lim_fits", "-lim_camraw", "-o", "formats_test"
+    formats_output = shell_output("./formats_test")
+
     assert_match(/IM version:/, output)
     assert_match(/decorrelation stretch: working/, output)
     assert_match(/watershed: working/, output)
@@ -385,5 +546,11 @@ class TecgrafIm < Formula
     assert_match(/BMP line padding: zeros/, unset_output)
     assert_match(/GIF interlaced flag: clear/, unset_output)
     assert_match(/PCX palette tail: zeros/, unset_output)
+    %w[HDR QOI WEBP JXL EXR FITS CAMRAW].each do |format|
+      assert_match(/#{format} registered: yes/, formats_output)
+    end
+    %w[QOI WEBP JXL EXR FITS HDR].each do |format|
+      assert_match(/#{format} round trip: ok/, formats_output)
+    end
   end
 end
