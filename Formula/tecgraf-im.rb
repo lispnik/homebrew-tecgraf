@@ -1,8 +1,8 @@
 class TecgrafIm < Formula
   desc "Toolkit for digital imaging with simple API for scientific applications"
   homepage "https://github.com/lispnik/tecgraf-im"
-  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.3.0.tar.gz"
-  sha256 "b82286273f2b4e9978b3a858f21bd412df66c257f9165d9527fda9ca4149b402"
+  url "https://github.com/lispnik/tecgraf-im/archive/refs/tags/v2.3.1.tar.gz"
+  sha256 "d2bd0fed590b7615f12f9964e1dcef013e0b5b53aca60aa6b388935ff9ed08b4"
   license "MIT"
   head "https://github.com/lispnik/tecgraf-im.git", branch: "master"
 
@@ -407,6 +407,11 @@ class TecgrafIm < Formula
     # writable one is round-tripped losslessly -- HDR to RGBE's own
     # precision -- and CAMRAW, read-only, has to be registered. Fails against
     # 2.2.2, which has none of them.
+    #
+    # 2.3.1 kept every format's strings within the 50 characters im.h promises
+    # imFormatInfo's callers. CAMRAW listed 156 characters of extensions, which
+    # overran the 50-byte stack buffer of imlua's im.FormatInfo. Fails against
+    # 2.3.0.
     (testpath/"formats.c").write <<~EOS
       #include <im.h>
       #include <im_image.h>
@@ -530,6 +535,27 @@ class TecgrafIm < Formula
               all = all && ok;
           }
 
+          /* Asked with room to spare, so a string too long is measured
+             rather than overrunning this buffer. */
+          {
+              char* list[64];
+              int count = 0, over = 0;
+              imFormatList(list, &count);
+              for (i = 0; i < count; i++)
+              {
+                  char desc[1024], ext[1024], extra[1024];
+                  int can_sequence;
+                  imFormatInfo(list[i], desc, ext, &can_sequence);
+                  imFormatInfoExtra(list[i], extra);
+                  if (strlen(desc) >= 50 || strlen(ext) >= 50 || strlen(extra) >= 50)
+                  {
+                      printf("%s strings: over 50 characters\\n", list[i]);
+                      over = 1;
+                  }
+              }
+              printf("format strings: %s\\n", over ? "too long" : "within im.h's limits");
+          }
+
           return all ? 0 : 1;
       }
     EOS
@@ -554,5 +580,6 @@ class TecgrafIm < Formula
     %w[QOI WEBP JXL EXR FITS HDR].each do |format|
       assert_match(/#{format} round trip: ok/, formats_output)
     end
+    assert_match(/format strings: within im.h's limits/, formats_output)
   end
 end
